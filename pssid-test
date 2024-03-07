@@ -1,0 +1,95 @@
+#!/usr/bin/bash
+
+#
+# pssid-test
+# A command run by pssid to gather wireless metrics
+#
+# External programes used (and the package it is usually shipped with):
+# - wpa_supplicant
+# - wpa_cli (wpa_supplicant)
+# - cut (coreutils)
+# - tail (coreutils)
+# - grep
+# - jq
+# - bc
+# - base64 (coreutils)
+
+function main() {
+  local -r log_file='/tmp/pssid-wpa_supplicant.log'
+  local -i verbosity=0
+  local wpa_conf
+  local int
+  local ctrl_path
+  local init_time
+  local connected_times
+
+  while getopts 'c:i:hv' opt; do
+    case "${opt}" in
+      c) wpa_conf="${OPTARG}" ;;
+      i) int="${OPTARG}" ;;
+      v) (( verbosity++ )) ;;
+      h) help 0 ;;
+      *) help 1 ;;
+    esac
+  done
+
+  [[ "$UID" == 0 ]] || bail 1 "Must be root"
+  [[ -n "${wpa_conf}" ]] || bail 1 "A wpa_supplicant config file is required"
+  [[ -n "${int}" ]] || bail 1 "Must specify the interface"
+
+  ctrl_path="$(grep ctrl_interface "${wpa_conf}" | cut -f 2 -d '=')"
+  [[ -n "${ctrl_path}" ]] || bail 1 "Configuration file must have a ctrl_interface directive"
+
+  if [[ -f "${log_file}" ]]; then
+    if [[ ${verbosity} -gt 0 ]]; then
+      echo "WARNING: log file '$log_file' already exists -- removing" >&2
+    fi
+    rm "${log_file}" || bail 255 "Error removing old log file"
+  fi
+
+  wpa_supplicant \
+    -B \
+    -t \
+    -i "$int" \
+    -c "$wpa_conf" \
+    -f "${log_file}" \
+    || bail 1 "Error running wpa_supplicant -- check the config file and interface name"
+  tail -f "${log_file}" \
+    | grep -m 1 CTRL-EVENT-CONNECTED \
+    > /dev/null
+  init_time="$(head -1 "${log_file}" | cut -f 1 -d ':')"
+  connected_times="$(grep CTRL-EVENT-CONNECTED "${log_file}" | cut -f 1 -d ':')"
+  time_to_connect=$(bc <<< "${connected_times} - ${init_time}")
+
+  jq \
+    --compact-output \
+    << EOF
+{
+  "time_to_connect": ${time_to_connect},
+  "wpa_log": "$(base64 -w 0 < ${log_file})"
+}
+EOF
+
+  bail 0
+}
+
+function help() {
+  echo "usage: $(basename "$0") -c <wpa_supplicant.conf>  -i <wireless interface> [-v]"
+  exit "$1"
+}
+
+function bail() {
+  local -i exit_code="$1"
+  local -i i=0
+  shift
+  [[ -f "${log_file}" ]] && rm -f "${log_file}"
+  [[ -S "${ctrl_path}/$int" ]] && wpa_cli -i "$int" terminate > /dev/null
+  while [[ -n "$1" && i -le $verbosity ]]; do
+    echo "$(basename "$0"): $1" >&2
+    shift
+    (( i++ ))
+  done
+  exit $exit_code
+}
+
+main "$@"
