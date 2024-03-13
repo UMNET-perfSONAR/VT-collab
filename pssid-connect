@@ -69,12 +69,21 @@ function main() {
 	result=$?
 	if [[ $result == 0 ]]; then
 		init_time="$(head -1 "${log_file}" | cut -f 1 -d ':')"
-		connected_times="$(grep CTRL-EVENT-CONNECTED "${log_file}" | cut -f 1 -d ':')"
-		time_to_connect=$(bc <<< "${connected_times} - ${init_time}")
+		wep_auth_starts="$(times_of 'Trying to authenticate with' "${log_file}")"
+		assoc_starts="$(times_of 'Trying to associate with' "${log_file}")"
+		assoc_ends="$(times_of 'Associated with' "${log_file}")"
+		wpa_auth_starts="$(times_of 'CTRL-EVENT-EAP-STARTED' "${log_file}")"
+		wpa_auth_ends="$(times_of 'CTRL-EVENT-EAP-SUCCESS' "${log_file}")"
+		connected_times="$(times_of 'CTRL-EVENT-CONNECTED' "${log_file}")"
+
 		jq --compact-output <<-EOF
 		{
 			"wpa_status": 0,
-			"time_to_connect": ${time_to_connect},
+			"time_to_connect":   $(duration "${init_time}"       "${connected_times}" ),
+			"time_to_scan":      $(duration "${init_time}"       "${wep_auth_starts}" ),
+			"time_to_wep":       $(duration "${wep_auth_starts}" "${assoc_starts}"    ),
+			"time_to_associate": $(duration "${assoc_starts}"    "${assoc_ends}"      ),
+			"time_to_wpa":       $(duration "${wpa_auth_starts}" "${wpa_auth_ends}"   ),
 			"wpa_log": "$(base64 -w 0 < ${log_file})"
 		}
 		EOF
@@ -109,6 +118,26 @@ function bail() {
 		(( i++ ))
 	done
 	exit $exit_code
+}
+
+# Get the timestamps of lines that match "$1" from log "$2"
+# The timestamps in the log are expected to befractional seconds since epoch,
+# and are returned in the same format.
+# Output is newline delimited
+function times_of() {
+	local match="$1"
+	local log_file="$2"
+
+	[[ -n "${match}" ]] || bail 255 "No match given"
+	[[ -n "${log_file}" ]] || bail 255 "No log file given to search"
+
+	grep "${match}" "${log_file}" | cut -f 1 -d ':'
+}
+
+# time between start ($1) and stop ($2) timestamps
+# input and output are seconds since epoch
+function duration() {
+	bc <<< "$2 - $1"
 }
 
 main "$@"
