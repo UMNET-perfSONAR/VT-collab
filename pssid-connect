@@ -54,18 +54,18 @@ function main() {
 		rm "${log_file}" || bail 255 "Error removing old log file"
 	fi
 
+	wpa_supplicant \
+		-B \
+		-t \
+		-i "$int" \
+		-c "$wpa_conf" \
+		-f "${log_file}" \
+		|| bail 1 "Error launching wpa_supplicant." \
+			"Check the config file and interface name"
 	timeout 10 \
-		wpa_supplicant \
-			-B \
-			-t \
-			-i "$int" \
-			-c "$wpa_conf" \
-			-f "${log_file}" \
-			|| bail 1 "Error launching wpa_supplicant." \
-				"Check the config file and interface name"
-	tail -f "${log_file}" \
-		| grep -m 1 CTRL-EVENT-CONNECTED \
-		> /dev/null
+		tail -f "${log_file}" \
+			| grep -m 1 CTRL-EVENT-CONNECTED \
+			> /dev/null
 	result=$?
 	if [[ $result == 0 ]]; then
 		init_time="$(head -1 "${log_file}" | cut -f 1 -d ':')"
