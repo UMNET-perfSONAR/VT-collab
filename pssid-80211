@@ -22,9 +22,7 @@ function main() {
 	local wpa_conf
 	local int
 	local ctrl_path
-	local init_time
-	local connected_times
-	local result
+	local json
 	local -i disconnect=0
 
 	while getopts 'c:di:hv' opt; do
@@ -57,6 +55,7 @@ function main() {
 	wpa_supplicant \
 		-B \
 		-t \
+		-d \
 		-i "$int" \
 		-c "$wpa_conf" \
 		-f "${log_file}" \
@@ -66,36 +65,9 @@ function main() {
 		tail -f "${log_file}" \
 			| grep -m 1 CTRL-EVENT-CONNECTED \
 			> /dev/null
-	result=$?
-	if [[ $result == 0 ]]; then
-		init_time="$(head -1 "${log_file}" | cut -f 1 -d ':')"
-		wep_auth_starts="$(times_of 'Trying to authenticate with' "${log_file}")"
-		assoc_starts="$(times_of 'Trying to associate with' "${log_file}")"
-		assoc_ends="$(times_of 'Associated with' "${log_file}")"
-		wpa_auth_starts="$(times_of 'CTRL-EVENT-EAP-STARTED' "${log_file}")"
-		wpa_auth_ends="$(times_of 'CTRL-EVENT-EAP-SUCCESS' "${log_file}")"
-		connected_times="$(times_of 'CTRL-EVENT-CONNECTED' "${log_file}")"
-
-		jq --compact-output <<-EOF
-		{
-			"wpa_status": 0,
-			"time_to_connect":   $(duration "${init_time}"       "${connected_times}" ),
-			"time_to_scan":      $(duration "${init_time}"       "${wep_auth_starts}" ),
-			"time_to_wep":       $(duration "${wep_auth_starts}" "${assoc_starts}"    ),
-			"time_to_associate": $(duration "${assoc_starts}"    "${assoc_ends}"      ),
-			"time_to_wpa":       $(duration "${wpa_auth_starts}" "${wpa_auth_ends}"   ),
-			"wpa_log": "$(base64 -w 0 < ${log_file})"
-		}
-		EOF
-	else
-		jq --compact-output <<-EOF
-		{
-			"wpa_status": 1,
-			"wpa_log": "$(base64 -w 0 < ${log_file})"
-		}
-		EOF
-		bail 1
-	fi
+	json="$(parse_results $?)"
+	log="$(zstd -qc "${log_file}" | base64)"
+	jq -c ". + {\"wpa_log\": \"${log}\"}" <<< "${json}"
 }
 
 function help() {
@@ -106,32 +78,394 @@ function help() {
 	exit "$1"
 }
 
+# Arguments:
+#   $1: overall status result
+# Inherited parameters:
+#   $wpa_conf
+#   $ctrl_path
+#   $int
+function parse_results() {
+	local json="{\"80211_status\": $1}"
+	local sub_json
+	local sub_status
+
+	sub_json="$(parse_scan)"
+	sub_status=$?
+	json="$(jq -c ". + {\"scan\": ${sub_json}}" <<< "${json}")"
+	if [[ ${sub_status} != 0 ]]; then
+		echo "${json}"
+		return ${sub_status}
+	fi
+
+	sub_json="$(parse_sme_auth)"
+	sub_status=$?
+	json="$(jq -c ". + {\"sme_auth\": ${sub_json}}" <<< "${json}")"
+	if [[ ${sub_status} != 0 ]]; then
+		echo "${json}"
+		return ${sub_status}
+	fi
+
+	sub_json="$(parse_assoc)"
+	sub_status=$?
+	json="$(jq -c ". + {\"associate\": ${sub_json}}" <<< "${json}")"
+	if [[ ${sub_status} != 0 ]]; then
+		echo "${json}"
+		return ${sub_status}
+	fi
+
+	if [[ "NONE" == "$(wpa_cli -i "$int" -p "$ctrl_path" get_network 0 key_mgmt)" ]]; then
+		sub_json="$(parse_open)"
+		sub_status=$?
+		json="$(jq -c ". + {\"open_complete\": ${sub_json}}" <<< "${json}")"
+	else
+		sub_json="$(parse_wpa)"
+		sub_status=$?
+		json="$(jq -c ". + {\"wpa\": ${sub_json}}" <<< "${json}")"
+	fi
+
+	jq -c . <<< "${json}"
+	return $sub_status
+}
+
+function parse_scan() {
+	local starts
+	local stops
+	local count
+	local status_code
+	local status_string
+
+	if ! starts=$(times_of 'State: DISCONNECTED -> SCANNING'); then
+		status_code=1
+		status_string="No scan found"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": 0
+		}
+		EOF
+		return 1
+	fi
+	count=$(wc -l <<< "$starts")
+	if [[ $count -gt 1 ]]; then
+		log "${count} found; this tool currently parses exactly one scan" \
+			"Scans started at:\n${starts}"
+		status_code=2
+		status_string="Not implemented: more than one scan found"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": 0
+		}
+		EOF
+		return ${status_code}
+	fi
+	if ! stops=$(times_of 'State: SCANNING -> AUTHENTICATING'); then
+		status_code=3
+		status_string="Network not found"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": 0
+		}
+		EOF
+		return ${status_code}
+	fi
+	status_code=0
+	status_string="success"
+	jq -c . <<- EOF
+	{
+		"status_code": ${status_code},
+		"status_string": "${status_string}",
+		"scan_count": $count,
+		"durations": [
+			$(bc <<< "$stops - $starts")
+		]
+	}
+	EOF
+	return $status_code
+}
+
+function parse_sme_auth() {
+	local starts
+	local stops
+	local count
+	local status_code
+	local status_string
+
+	if ! starts=$(times_of 'State: SCANNING -> AUTHENTICATING'); then
+		status_code=1
+		status_string="No SME authentication found"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": 0
+		}
+		EOF
+		return 1
+	fi
+	count=$(wc -l <<< "$starts")
+	if [[ $count -gt 1 ]]; then
+		log "${count} found; this tool currently parses exactly one auth" \
+			"Auths started at:\n${starts}"
+		status_code=2
+		status_string="Not implemented: more than one auth found"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": $count
+		}
+		EOF
+		return ${status_code}
+	fi
+	if ! stops=$(times_of 'State: AUTHENTICATING -> ASSOCIATING'); then
+		status_code=3
+		status_string="Authentication failed"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": $count
+		}
+		EOF
+		return ${status_code}
+	fi
+	status_code=0
+	status_string="success"
+	jq -c . <<- EOF
+	{
+		"status_code": ${status_code},
+		"status_string": "${status_string}",
+		"scan_count": $count,
+		"durations": [
+			$(bc <<< "$stops - $starts")
+		]
+	}
+	EOF
+	return $status_code
+}
+
+function parse_assoc() {
+	local starts
+	local stops
+	local count
+	local status_code
+	local status_string
+
+	if ! starts=$(times_of 'State: AUTHENTICATING -> ASSOCIATING'); then
+		status_code=1
+		status_string="No SME authentication found"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": 0
+		}
+		EOF
+		return 1
+	fi
+	count=$(wc -l <<< "$starts")
+	if [[ $count -gt 1 ]]; then
+		log "${count} found; this tool currently parses exactly one association attempt" \
+			"Associations started at:\n${starts}"
+		status_code=2
+		status_string="Not implemented: more than one association found"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": $count
+		}
+		EOF
+		return ${status_code}
+	fi
+	if ! stops=$(times_of 'State: ASSOCIATING -> ASSOCIATED'); then
+		status_code=3
+		status_string="Association failed"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": $count
+		}
+		EOF
+		return ${status_code}
+	fi
+	status_code=0
+	status_string="success"
+	jq -c . <<- EOF
+	{
+		"status_code": ${status_code},
+		"status_string": "${status_string}",
+		"scan_count": $count,
+		"durations": [
+			$(bc <<< "$stops - $starts")
+		]
+	}
+	EOF
+	return $status_code
+}
+
+function parse_wpa() {
+	local starts
+	local stops
+	local count
+	local status_code
+	local status_string
+
+	if ! starts=$(times_of 'State: ASSOCIATED -> 4WAY_HANDSHAKE'); then
+		status_code=1
+		status_string="No WPA handshake found"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": 0
+		}
+		EOF
+		return 1
+	fi
+	count=$(wc -l <<< "$starts")
+	if [[ $count -gt 1 ]]; then
+		log "${count} found; this tool currently parses exactly one WPA handshake attempt" \
+			"Handshakes started at:\n${starts}"
+		status_code=2
+		status_string="Not implemented: more than one WPA handshake found"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": $count
+		}
+		EOF
+		return ${status_code}
+	fi
+	if ! stops=$(times_of 'GROUP_HANDSHAKE -> COMPLETED'); then
+		status_code=3
+		status_string="Handshake failed"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": $count
+		}
+		EOF
+		return ${status_code}
+	fi
+	status_code=0
+	status_string="success"
+	jq -c . <<- EOF
+	{
+		"status_code": ${status_code},
+		"status_string": "${status_string}",
+		"scan_count": $count,
+		"durations": [
+			$(bc <<< "$stops - $starts")
+		]
+	}
+	EOF
+	return $status_code
+}
+
+function parse_open() {
+	local starts
+	local stops
+	local count
+	local status_code
+	local status_string
+
+	if ! starts=$(times_of 'State: ASSOCIATING -> ASSOCIATED'); then
+		status_code=1
+		status_string="Unexpected failure: no associations"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": 0
+		}
+		EOF
+		return 1
+	fi
+	count=$(wc -l <<< "$starts")
+	if [[ $count -gt 1 ]]; then
+		log "Something very unexpected happened between association and completion"
+		status_code=2
+		status_string="Unexpected failure: more than one association"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": $count
+		}
+		EOF
+		return ${status_code}
+	fi
+	if ! stops=$(times_of 'ASSOCIATED -> COMPLETED'); then
+		status_code=3
+		status_string="Unexpected failure: more than one completion"
+		jq -c . <<- EOF
+		{
+			"status_code": ${status_code},
+			"status_string": "${status_string}",
+			"scan_count": $count
+		}
+		EOF
+		return ${status_code}
+	fi
+	status_code=0
+	status_string="success"
+	jq -c . <<- EOF
+	{
+		"status_code": ${status_code},
+		"status_string": "${status_string}",
+		"scan_count": $count,
+		"durations": [
+			$(bc <<< "$stops - $starts")
+		]
+	}
+	EOF
+	return $status_code
+}
+
+function log() {
+	local -i i=0
+	while [[ $# -gt 0 && i -le $verbosity ]]; do
+		[[ -n "$1" ]] && echo "$(basename "$0"): $1" >&2
+		shift
+		(( i++ ))
+	done
+}
+
 function bail() {
 	local -i exit_code="$1"
 	local -i i=0
 	shift
 	[[ -f "${log_file}" ]] && rm -f "${log_file}"
-	[[ -S "${ctrl_path}/$int" ]] && wpa_cli -i "$int" terminate > /dev/null
-	while [[ -n "$1" && i -le $verbosity ]]; do
-		echo "$(basename "$0"): $1" >&2
-		shift
-		(( i++ ))
-	done
+	[[ -S "${ctrl_path}/$int" ]] && wpa_cli \
+		-i "$int" \
+		-p "$ctrl_path" \
+		terminate \
+		> /dev/null
+	log "$@"
 	exit $exit_code
 }
 
-# Get the timestamps of lines that match "$1" from log "$2"
-# The timestamps in the log are expected to befractional seconds since epoch,
+# Get the timestamps of lines that match "$1" from log "$log_file"
+# The timestamps in the log are expected to be fractional seconds since epoch,
 # and are returned in the same format.
 # Output is newline delimited
 function times_of() {
 	local match="$1"
-	local log_file="$2"
 
 	[[ -n "${match}" ]] || bail 255 "No match given"
 	[[ -n "${log_file}" ]] || bail 255 "No log file given to search"
 
 	grep "${match}" "${log_file}" | cut -f 1 -d ':'
+	return "${PIPESTATUS[0]}"
 }
 
 # time between start ($1) and stop ($2) timestamps
