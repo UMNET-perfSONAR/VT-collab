@@ -1,20 +1,21 @@
 #!/usr/bin/bash
 
 #
-# pssid-test
-# A command run by pssid to gather wireless metrics
+# pssid-80211
+# A command run by pssid to gather Wi-Fi metrics
 #
-# External programes used (and the package it is usually shipped with):
-# - base64 (coreutils)
+# External programes used:
+# - base64
 # - bc
-# - cut (coreutils)
+# - cut
 # - grep
 # - jq
-# - tail (coreutils)
-# - timeout (coreutils)
-# - wpa_cli (wpa_supplicant)
+# - tail
+# - timeout
+# - wpa_cli
 # - wpa_supplicant
-# - xargs (findutils)
+# - xargs
+# - zstd
 
 function main() {
 	local -r log_file='/tmp/pssid-wpa_supplicant.log'
