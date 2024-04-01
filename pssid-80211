@@ -25,6 +25,7 @@ function main() {
 	local ctrl_path
 	local json
 	local -i disconnect=0
+	local global_status
 
 	while getopts 'c:di:hv' opt; do
 		case "${opt}" in
@@ -66,9 +67,12 @@ function main() {
 		tail -f "${log_file}" \
 			| grep -m 1 CTRL-EVENT-CONNECTED \
 			> /dev/null
-	json="$(parse_results $?)"
+	global_status=$?
+	json="$(parse_results ${global_status})"
 	log="$(zstd -qc "${log_file}" | base64)"
 	jq -c ". + {\"wpa_log\": \"${log}\"}" <<< "${json}"
+	[[ ${global_status} == 0 ]] \
+		|| bail ${global_status} "Failed to connect; exiting wpa_supplicant"
 }
 
 function help() {
