@@ -132,6 +132,9 @@ function parse_results() {
 	return $sub_status
 }
 
+# TODO:
+# - Include found networks
+# - Include scanned frequencies
 function parse_scan() {
 	local starts
 	local stops
@@ -139,7 +142,7 @@ function parse_scan() {
 	local status_code
 	local status_string
 
-	if ! starts=$(times_of 'State: DISCONNECTED -> SCANNING'); then
+	if ! starts=$(times_of 'State: .* -> SCANNING'); then
 		status_code=1
 		status_string="No scan found"
 		jq -c . <<- EOF
@@ -166,14 +169,21 @@ function parse_scan() {
 		EOF
 		return ${status_code}
 	fi
-	if ! stops=$(times_of 'State: SCANNING -> AUTHENTICATING'); then
-		status_code=3
-		status_string="Network not found"
+	if ! stops=$(times_of 'State: SCANNING -> .*'); then
+		if ! stops=$(times_of 'No suitable network found'); then
+			status_code=3
+			status_string="No end of scan found"
+			scan_count=0
+		else
+			status_code=4
+			status_string='No suitable network found'
+			scan_count=$(wc -l <<< "${stops}")
+		fi
 		jq -c . <<- EOF
 		{
 			"status_code": ${status_code},
 			"status_string": "${status_string}",
-			"scan_count": 0
+			"scan_count": ${scan_count}
 		}
 		EOF
 		return ${status_code}
@@ -200,7 +210,7 @@ function parse_sme_auth() {
 	local status_code
 	local status_string
 
-	if ! starts=$(times_of 'State: SCANNING -> AUTHENTICATING'); then
+	if ! starts=$(times_of 'State: .* -> AUTHENTICATING'); then
 		status_code=1
 		status_string="No SME authentication found"
 		jq -c . <<- EOF
@@ -227,8 +237,9 @@ function parse_sme_auth() {
 		EOF
 		return ${status_code}
 	fi
-	if ! stops=$(times_of 'State: AUTHENTICATING -> ASSOCIATING'); then
+	if ! stops=$(times_of 'State: AUTHENTICATING -> .*'); then
 		status_code=3
+		# TODO: this is inferred. State what actually happened instead
 		status_string="Authentication failed"
 		jq -c . <<- EOF
 		{
@@ -261,7 +272,7 @@ function parse_assoc() {
 	local status_code
 	local status_string
 
-	if ! starts=$(times_of 'State: AUTHENTICATING -> ASSOCIATING'); then
+	if ! starts=$(times_of 'State: .* -> ASSOCIATING'); then
 		status_code=1
 		status_string="No SME authentication found"
 		jq -c . <<- EOF
@@ -288,7 +299,7 @@ function parse_assoc() {
 		EOF
 		return ${status_code}
 	fi
-	if ! stops=$(times_of 'State: ASSOCIATING -> ASSOCIATED'); then
+	if ! stops=$(times_of 'State: ASSOCIATING -> .*'); then
 		status_code=3
 		status_string="Association failed"
 		jq -c . <<- EOF
@@ -322,7 +333,7 @@ function parse_wpa() {
 	local status_code
 	local status_string
 
-	if ! starts=$(times_of 'State: ASSOCIATED -> 4WAY_HANDSHAKE'); then
+	if ! starts=$(times_of 'State: ((?!4WAY_HANDSHAKE).*) -> 4WAY_HANDSHAKE'); then
 		status_code=1
 		status_string="No WPA handshake found"
 		jq -c . <<- EOF
@@ -349,7 +360,7 @@ function parse_wpa() {
 		EOF
 		return ${status_code}
 	fi
-	if ! stops=$(times_of 'GROUP_HANDSHAKE -> COMPLETED'); then
+	if ! stops=$(times_of 'State: .*_HANDSHAKE -> COMPLETED'); then
 		status_code=3
 		status_string="Handshake failed"
 		jq -c . <<- EOF
@@ -383,7 +394,7 @@ function parse_open() {
 	local status_code
 	local status_string
 
-	if ! starts=$(times_of 'State: ASSOCIATING -> ASSOCIATED'); then
+	if ! starts=$(times_of 'State: .* -> ASSOCIATED'); then
 		status_code=1
 		status_string="Unexpected failure: no associations"
 		jq -c . <<- EOF
@@ -409,7 +420,7 @@ function parse_open() {
 		EOF
 		return ${status_code}
 	fi
-	if ! stops=$(times_of 'ASSOCIATED -> COMPLETED'); then
+	if ! stops=$(times_of 'State: ASSOCIATED -> COMPLETED'); then
 		status_code=3
 		status_string="Unexpected failure: more than one completion"
 		jq -c . <<- EOF
@@ -469,7 +480,7 @@ function times_of() {
 	[[ -n "${match}" ]] || bail 255 "No match given"
 	[[ -n "${log_file}" ]] || bail 255 "No log file given to search"
 
-	grep "${match}" "${log_file}" | cut -f 1 -d ':'
+	grep -P "${match}" "${log_file}" | cut -f 1 -d ':'
 	return "${PIPESTATUS[0]}"
 }
 
