@@ -1,0 +1,117 @@
+#!/usr/bin/bash
+
+#
+# pssid-dhcp
+# A command run by pssid to gather dhcp metrics
+#
+# External programes used:
+# - base64
+# - bc
+# - cut
+# - grep
+# - jq
+# - tail
+# - dhcpcd
+# - zstd
+
+function main() {
+	local -r log_file='/tmp/pssid-dhcpcd.log'
+	local -i verbosity=0
+	local -i disconnect=0
+	local int
+	local process_status
+	local dhcpcd_start
+	local dhcpcd_done
+	local discover_time
+	local offer_time
+
+	while getopts 'di:hv' opt; do
+		case "${opt}" in
+			d) disconnect=1 ;;
+			i) int="${OPTARG}" ;;
+			v) (( verbosity++ )) ;;
+			h) help 0 ;;
+			*) help 1 ;;
+		esac
+	done
+
+	[[ "$UID" == 0 ]] || bail 1 '' 'Must be root'
+	[[ -n "${int}" ]] || bail 1 '' 'Must specify the interface'
+	[[ "${disconnect}" == 1 ]] && bail 0 "${int}"
+	dhcpcd_running "${int}" && \
+		bail 2 "${int}" 'dhcpcd is already running' 'bailing and cleaning up'
+
+	if [[ -f "${log_file}" ]]; then
+		if [[ ${verbosity} -gt 0 ]]; then
+			log '' "WARNING: log file '$log_file' already exists -- removing"
+		fi
+		rm "${log_file}" || bail 255 "${int}" "Error removing old log file"
+	fi
+
+	dhcpcd "${int}" -j "${log_file}"
+	process_status=$?
+	dhcpcd_start="$(get_time "$(head -1 "${log_file}")")"
+	dhcpcd_done="$(get_time "$(head -1 "${log_file}")")"
+	discover_time="$(get_time "$(grep -m 1 'soliciting a DHCP lease' "${log_file}")")"
+	offer_time="$(get_time "$(grep "${int}: offered " "${log_file}" | tail -n 1)")"
+
+	jq -c . <<- EOF
+	{
+		"process_status": ${process_status},
+		"process_duration": $(duration "${dhcpcd_start}" "${dhcpcd_done}"),
+		"protocol_duration": $(duration "${discover_time}" "${offer_time}"),
+		"ip_addr": $(ip -j addr show "${int}" | jq -c '.[]'),
+		"dhcpcd_log": "$(zstd -qc "${log_file}" | base64 -w 0)"
+	}
+	EOF
+
+	[[ ${process_status} == 0 ]] \
+		|| bail ${process_status} "${int}" "dhcpcd failed; exiting"
+}
+
+function help() {
+	local self
+	self="$(basename "$0")"
+	echo "Connect with: $self -i <wlan interface> [-v]"
+	echo "Disconnect with: $self -d -i <wlan interface> [-v]"
+	exit "$1"
+}
+
+function log() {
+	local -i i=0
+	while [[ $# -gt 0 && i -le $verbosity ]]; do
+		[[ -n "$1" ]] && echo "$(basename "$0"): $1" >&2
+		shift
+		(( i++ ))
+	done
+}
+
+function bail() {
+	local -i exit_code="$1"
+	local interface="$2"
+	shift 2
+	[[ -f "${log_file}" ]] && rm -f "${log_file}"
+	dhcpcd_running "${interface}" && dhcpcd -k "${interface}"
+	log "$@"
+	exit $exit_code
+}
+
+# $1: a line of dhcpcd log
+# stdout: the timestamp in seconds since epoch
+function get_time() {
+	date -d "$(cut -f 1 -d '[' <<< "$1")" '+%s'
+}
+
+# time between start ($1) and stop ($2) timestamps
+# input and output are seconds since epoch
+function duration() {
+	bc <<< "$2 - $1"
+}
+
+function dhcpcd_running() {
+	[[ -n "$1" && -f "/run/dhcpcd/$1.pid" ]]
+}
+
+main "$@"
+
+# vim: ts=4 sts=4 sw=4 noexpandtab
