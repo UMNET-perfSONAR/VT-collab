@@ -118,11 +118,7 @@ function parse_results() {
 		return ${sub_status}
 	fi
 
-	if [[ "NONE" == "$(wpa_cli -i "$int" -p "$ctrl_path" get_network 0 key_mgmt)" ]]; then
-		sub_json="$(parse_open)"
-		sub_status=$?
-		json="$(jq -c ". + {\"open_complete\": ${sub_json}}" <<< "${json}")"
-	else
+	if [[ "NONE" != "$(wpa_cmd get_network 0 key_mgmt)" ]]; then
 		sub_json="$(parse_wpa)"
 		sub_status=$?
 		json="$(jq -c ". + {\"wpa\": ${sub_json}}" <<< "${json}")"
@@ -363,66 +359,6 @@ function parse_wpa() {
 	if ! stops=$(times_of 'State: .*_HANDSHAKE -> COMPLETED'); then
 		status_code=3
 		status_string="Handshake failed"
-		jq -c . <<- EOF
-		{
-			"status_code": ${status_code},
-			"status_string": "${status_string}",
-			"scan_count": $count
-		}
-		EOF
-		return ${status_code}
-	fi
-	status_code=0
-	status_string="success"
-	jq -c . <<- EOF
-	{
-		"status_code": ${status_code},
-		"status_string": "${status_string}",
-		"scan_count": $count,
-		"durations": [
-			$(bc <<< "$stops - $starts")
-		]
-	}
-	EOF
-	return $status_code
-}
-
-function parse_open() {
-	local starts
-	local stops
-	local count
-	local status_code
-	local status_string
-
-	if ! starts=$(times_of 'State: .* -> ASSOCIATED'); then
-		status_code=1
-		status_string="Unexpected failure: no associations"
-		jq -c . <<- EOF
-		{
-			"status_code": ${status_code},
-			"status_string": "${status_string}",
-			"scan_count": 0
-		}
-		EOF
-		return 1
-	fi
-	count=$(wc -l <<< "$starts")
-	if [[ $count -gt 1 ]]; then
-		log "Something very unexpected happened between association and completion"
-		status_code=2
-		status_string="Unexpected failure: more than one association"
-		jq -c . <<- EOF
-		{
-			"status_code": ${status_code},
-			"status_string": "${status_string}",
-			"scan_count": $count
-		}
-		EOF
-		return ${status_code}
-	fi
-	if ! stops=$(times_of 'State: ASSOCIATED -> COMPLETED'); then
-		status_code=3
-		status_string="Unexpected failure: more than one completion"
 		jq -c . <<- EOF
 		{
 			"status_code": ${status_code},
