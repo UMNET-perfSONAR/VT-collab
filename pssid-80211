@@ -39,11 +39,11 @@ function main() {
 	done
 
 	[[ "$UID" == 0 ]] || bail 1 "Must be root"
-	[[ -n "${int}" ]] || bail 1 "Must specify the interface"
-	[[ -n "${wpa_conf}" ]] || bail 1 "A wpa_supplicant config file is required"
+	[[ -n "${int}" ]] || bail 2 "Must specify the interface"
+	[[ -n "${wpa_conf}" ]] || bail 3 "A wpa_supplicant config file is required"
 
 	ctrl_path="$(grep ctrl_interface "${wpa_conf}" | cut -f 2 -d '=' | xargs)"
-	[[ -n "${ctrl_path}" ]] || bail 1 "Configuration file must have a ctrl_interface directive"
+	[[ -n "${ctrl_path}" ]] || bail 4 "Configuration file must have a ctrl_interface directive"
 
 	[[ "${disconnect}" == 1 ]] && bail 0
 
@@ -51,7 +51,7 @@ function main() {
 		if [[ ${verbosity} -gt 0 ]]; then
 			echo "WARNING: log file '$log_file' already exists -- removing" >&2
 		fi
-		rm "${log_file}" || bail 255 "Error removing old log file"
+		rm "${log_file}" || bail 254 "Error removing old log file"
 	fi
 
 	wpa_supplicant \
@@ -61,7 +61,7 @@ function main() {
 		-i "$int" \
 		-c "$wpa_conf" \
 		-f "${log_file}" \
-		|| bail 1 "Error launching wpa_supplicant." \
+		|| bail 5 "Error launching wpa_supplicant." \
 			"Check the config file and interface name"
 	timeout 10 \
 		tail -f "${log_file}" \
@@ -413,8 +413,8 @@ function bail() {
 function times_of() {
 	local match="$1"
 
-	[[ -n "${match}" ]] || bail 255 "No match given"
-	[[ -n "${log_file}" ]] || bail 255 "No log file given to search"
+	[[ -n "${match}" ]] || bail 253 "No match given"
+	[[ -n "${log_file}" ]] || bail 252 "No log file given to search"
 
 	grep -P "${match}" "${log_file}" | cut -f 1 -d ':'
 	return "${PIPESTATUS[0]}"
