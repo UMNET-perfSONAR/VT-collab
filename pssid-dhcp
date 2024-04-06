@@ -108,6 +108,7 @@ function duration() {
 	bc <<< "$2 - $1"
 }
 
+# Is DHCP running on interface $1?
 function dhcpcd_running() {
 	[[ -n "$1" && -f "/run/dhcpcd/$1.pid" ]]
 }
