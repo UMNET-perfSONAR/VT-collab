@@ -26,6 +26,7 @@ function main() {
 	local json
 	local -i disconnect=0
 	local global_status
+	local json
 
 	while getopts 'c:di:hv' opt; do
 		case "${opt}" in
@@ -47,6 +48,11 @@ function main() {
 
 	[[ "${disconnect}" == 1 ]] && bail 0
 
+	if wpa_running; then
+		log "wpa_supplicant is already running."
+		return 255
+	fi
+
 	if [[ -f "${log_file}" ]]; then
 		if [[ ${verbosity} -gt 0 ]]; then
 			echo "WARNING: log file '$log_file' already exists -- removing" >&2
@@ -54,23 +60,23 @@ function main() {
 		rm "${log_file}" || bail 254 "Error removing old log file"
 	fi
 
-	wpa_supplicant \
-		-B \
-		-t \
-		-d \
-		-i "$int" \
-		-c "$wpa_conf" \
-		-f "${log_file}" \
-		|| bail 5 "Error launching wpa_supplicant." \
+	if ! wpa_supplicant -Btd -i "$int" -c "$wpa_conf" -f "${log_file}"; then
+		jq -c . <<- EOF | attach_log
+			{
+				"status_code": 5,
+				"status_message": "Error launching wpa_supplicant"
+			}
+			EOF
+		bail 5 "Error launching wpa_supplicant." \
 			"Check the config file and interface name"
+	fi
 	timeout 10 \
 		tail -f "${log_file}" \
 			| grep -m 1 CTRL-EVENT-CONNECTED \
 			> /dev/null
 	global_status=$?
 	json="$(parse_results ${global_status})"
-	log="$(zstd -qc "${log_file}" | base64)"
-	jq -c ". + {\"wpa_log\": \"${log}\"}" <<< "${json}"
+	attach_log <<< "${json}"
 	[[ ${global_status} == 0 ]] \
 		|| bail ${global_status} "Failed to connect; exiting wpa_supplicant"
 }
@@ -394,14 +400,8 @@ function log() {
 
 function bail() {
 	local -i exit_code="$1"
-	local -i i=0
 	shift
-	[[ -f "${log_file}" ]] && rm -f "${log_file}"
-	[[ -S "${ctrl_path}/$int" ]] && wpa_cli \
-		-i "$int" \
-		-p "$ctrl_path" \
-		terminate \
-		> /dev/null
+	wpa_running && wpa_cmd terminate > /dev/null
 	log "$@"
 	exit $exit_code
 }
@@ -424,6 +424,28 @@ function times_of() {
 # input and output are seconds since epoch
 function duration() {
 	bc <<< "$2 - $1"
+}
+
+function wpa_cmd() {
+	wpa_cli -i "${int}" -p "${ctrl_path}" "$@"
+}
+
+# Is the expected instance of wpa_supplicant already running?
+function wpa_running() {
+	[[ -S "${ctrl_path}/${int}" ]]
+}
+
+# stdin: original json object
+# stdout: json object with wpa_log
+# inherited parameters:
+# - log_file
+function attach_log() {
+	jq -c ". + {\"wpa_log\": \"$(encode < "${log_file}")\"}"
+	rm "${log_file}"
+}
+
+function encode() {
+	zstd | base64 -w 0
 }
 
 main "$@"
