@@ -26,13 +26,17 @@ function main() {
 	local json
 	local -i disconnect=0
 	local global_status
+	local mint=''
+	local -r pcap='/tmp/pssid.pcap'
+	local tcpdump_pid
 	local json
 
-	while getopts 'c:di:hv' opt; do
+	while getopts 'c:di:hm:v' opt; do
 		case "${opt}" in
 			c) wpa_conf="${OPTARG}" ;;
 			d) disconnect=1 ;;
 			i) int="${OPTARG}" ;;
+			m) mint="${OPTARG}" ;;
 			v) (( verbosity++ )) ;;
 			h) help 0 ;;
 			*) help 1 ;;
@@ -60,6 +64,13 @@ function main() {
 		rm "${log_file}" || bail 254 "Error removing old log file"
 	fi
 
+	if [[ -n "${mint}" ]]; then
+		echo -n "Starting tcpdump ($(date '+%s.%6N'))..." >&2
+		tcpdump -i "${mint}" -w "${pcap}" --nano > /dev/null 2>&1 &
+		tcpdump_pid=$!
+		echo "done ($(date '+%s.%6N'))" >&2
+	fi
+
 	if ! wpa_supplicant -Btd -i "$int" -c "$wpa_conf" -f "${log_file}"; then
 		jq -c . <<- EOF | attach_log
 			{
@@ -76,6 +87,12 @@ function main() {
 			> /dev/null
 	global_status=$?
 	json="$(parse_results ${global_status})"
+	if [[ -n "${mint}" ]]; then
+		echo -n "Stopping tcpdump ($(date '+%s.%6N'))..." >&2
+		kill "${tcpdump_pid}"
+		echo "done ($(date '+%s.%6N'))" >&2
+	    json="$(attach_pcap <<< "${json}")"
+	fi
 	attach_log <<< "${json}"
 	[[ ${global_status} == 0 ]] \
 		|| bail ${global_status} "Failed to connect; exiting wpa_supplicant"
@@ -84,7 +101,7 @@ function main() {
 function help() {
 	local self
 	self="$(basename "$0")"
-	echo "Connect with: $self -c <wpa_supplicant.conf> -i <wlan interface> [-v]"
+	echo "Connect with: $self -c <wpa_supplicant.conf> -i <wlan interface> [-m <monitor interface>] [-v]"
 	echo "Disconnect with: $self -d -c <wpa_supplicant.conf> -i <wlan interface> [-v]"
 	exit "$1"
 }
@@ -442,6 +459,11 @@ function wpa_running() {
 function attach_log() {
 	jq -c ". + {\"wpa_log\": \"$(encode < "${log_file}")\"}"
 	rm "${log_file}"
+}
+
+function attach_pcap() {
+	jq -c ". + {\"pcap\": \"$(encode < "${pcap}")\"}"
+	rm "${pcap}"
 }
 
 function encode() {
