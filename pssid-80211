@@ -154,6 +154,8 @@ function parse_results() {
 # TODO:
 # - Include found networks
 # - Include scanned frequencies
+# The timing here is nowhere near as precise as the other sections, mostly
+# because it doesn't need to be
 function parse_scan() {
 	local starts
 	local stops
@@ -222,6 +224,9 @@ function parse_scan() {
 	return $status_code
 }
 
+# inherits:
+# - int
+# - log_file
 function parse_sme_auth() {
 	local starts
 	local stops
@@ -229,7 +234,8 @@ function parse_sme_auth() {
 	local status_code
 	local status_string
 
-	if ! starts=$(times_of 'State: .* -> AUTHENTICATING'); then
+	# TODO: grab bssid here
+	if ! starts=$(times_of 'nl80211: New station '); then
 		status_code=1
 		status_string="No SME authentication found"
 		jq -c . <<- EOF
@@ -244,7 +250,7 @@ function parse_sme_auth() {
 	count=$(wc -l <<< "$starts")
 	if [[ $count -gt 1 ]]; then
 		log "${count} found; this tool currently parses exactly one auth" \
-			"Auths started at:\n${starts}"
+			"Auth started at:\n${starts}"
 		status_code=2
 		status_string="Not implemented: more than one auth found"
 		jq -c . <<- EOF
@@ -256,10 +262,9 @@ function parse_sme_auth() {
 		EOF
 		return ${status_code}
 	fi
-	if ! stops=$(times_of 'State: AUTHENTICATING -> .*'); then
+	if ! stops=$(times_of "nl80211: Drv Event 37 (NL80211_CMD_AUTHENTICATE) received for ${int}"); then
 		status_code=3
-		# TODO: this is inferred. State what actually happened instead
-		status_string="Authentication failed"
+		status_string="No authentication response found"
 		jq -c . <<- EOF
 		{
 			"status_code": ${status_code},
@@ -291,7 +296,11 @@ function parse_assoc() {
 	local status_code
 	local status_string
 
-	if ! starts=$(times_of 'State: .* -> ASSOCIATING'); then
+	# Current log is literally:
+	#   Association request send successfully
+	# A `.` is used to catch 'send' or 'sent', which is what the log is likely
+	# to change to
+	if ! starts=$(times_of 'Association request sen. successfully'); then
 		status_code=1
 		status_string="No SME authentication found"
 		jq -c . <<- EOF
@@ -318,7 +327,7 @@ function parse_assoc() {
 		EOF
 		return ${status_code}
 	fi
-	if ! stops=$(times_of 'State: ASSOCIATING -> .*'); then
+	if ! stops=$(times_of "nl80211: Drv Event 38 (NL80211_CMD_ASSOCIATE) received for ${int}"); then
 		status_code=3
 		status_string="Association failed"
 		jq -c . <<- EOF
