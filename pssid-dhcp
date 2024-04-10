@@ -51,7 +51,7 @@ function main() {
 	dhcpcd "${int}" -j "${log_file}"
 	process_status=$?
 	dhcpcd_start="$(get_time "$(head -1 "${log_file}")")"
-	dhcpcd_done="$(get_time "$(head -1 "${log_file}")")"
+	dhcpcd_done="$(get_time "$(tail -1 "${log_file}")")"
 	discover_time="$(get_time "$(grep -m 1 'soliciting a DHCP lease' "${log_file}")")"
 	offer_time="$(get_time "$(grep "${int}: offered " "${log_file}" | tail -n 1)")"
 
