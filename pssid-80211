@@ -417,7 +417,7 @@ function parse_wpa() {
 
 function log() {
 	local -i i=0
-	while [[ $# -gt 0 && i -le $verbosity ]]; do
+	while [[ $# -gt 0 && $i -le $verbosity ]]; do
 		[[ -n "$1" ]] && echo "$(basename "$0"): $1" >&2
 		shift
 		(( i++ ))
