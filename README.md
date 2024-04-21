@@ -2,6 +2,8 @@
 A collection of tools for testing layers 2 and 3 with pSSID.
 
 ## Setup
+- [Download][ubuntu] and install the Ubuntu Raspberry Pi Generic (64-bit ARM)
+  preinstalled server image
 - Disable the wpa_supplicant service: `systemctl --now disable wpa_supplicant`
 - Install additional dependencies: `apt install jq zstd`
 
@@ -97,4 +99,5 @@ ctrl_interface=/var/run/wpa_supplicant
 Configuring more than one wireless network may produce unexpected/unpredictable
 results.
 
+[ubuntu]: https://cdimage.ubuntu.com/releases/focal/release/ubuntu-20.04.5-preinstalled-server-arm64+raspi.img.xz
 [wpa_supplicant.conf]: https://w1.fi/cgit/hostap/plain/wpa_supplicant/wpa_supplicant.conf
