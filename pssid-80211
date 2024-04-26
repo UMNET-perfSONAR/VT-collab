@@ -4,9 +4,8 @@
 # pssid-80211
 # A command run by pssid to gather Wi-Fi metrics
 #
-# External programes used:
+# External programs used:
 # - base64
-# - bc
 # - cut
 # - grep
 # - jq
