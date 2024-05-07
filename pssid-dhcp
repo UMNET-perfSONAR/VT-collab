@@ -14,59 +14,44 @@
 # - dhcpcd
 # - zstd
 
+source "$(dirname "$0")/libpssid.sh"
+declare JSON
+
 function main() {
-	local -r log_file='/tmp/pssid-dhcpcd.log'
-	local -i verbosity=0
+	init_json || exit 1
+
 	local -i disconnect=0
-	local int
-	local process_status
-	local dhcpcd_start
-	local dhcpcd_done
-	local discover_time
-	local offer_time
+	local log_file
 
 	while getopts 'di:hv' opt; do
 		case "${opt}" in
 			d) disconnect=1 ;;
-			i) int="${OPTARG}" ;;
-			v) (( verbosity++ )) ;;
+			i) set_internal 'interface' "${OPTARG}" ;;
+			v) increase_verbosity ;;
 			h) help 0 ;;
 			*) help 1 ;;
 		esac
 	done
 
-	[[ "$UID" == 0 ]] || bail 1 '' 'Must be root'
-	[[ -n "${int}" ]] || bail 1 '' 'Must specify the interface'
-	[[ "${disconnect}" == 1 ]] && bail 0 "${int}"
-	dhcpcd_running "${int}" && \
-		bail 2 "${int}" 'dhcpcd is already running' 'bailing and cleaning up'
+	[[ "$UID" == 0 ]] || be_done 1 'Must be root'
+	internal | get 'interface' > /dev/null || be_done 2 'Must specify the interface'
+	[[ "${disconnect}" == 1 ]] && release
+	dhcpcd_running && release 3 "dhcpcd already running; releasing and cleaning up"
 
+	log_file="$(internal | get 'dhcpcd' | get 'log_file')"
 	if [[ -f "${log_file}" ]]; then
-		if [[ ${verbosity} -gt 0 ]]; then
-			log '' "WARNING: log file '$log_file' already exists -- removing"
-		fi
-		rm "${log_file}" || bail 255 "${int}" "Error removing old log file"
+		log 1 "WARNING: log file '$log_file' already exists -- removing"
+		rm "${log_file}" || be_done 255 "Error removing old log file"
 	fi
 
-	dhcpcd "${int}" -j "${log_file}"
-	process_status=$?
-	dhcpcd_start="$(get_time "$(head -1 "${log_file}")")"
-	dhcpcd_done="$(get_time "$(tail -1 "${log_file}")")"
-	discover_time="$(get_time "$(grep -m 1 'soliciting a DHCP lease' "${log_file}")")"
-	offer_time="$(get_time "$(grep "${int}: offered " "${log_file}" | tail -n 1)")"
+	log 0 "dhcpcd started"
+	dhcpcd "$(internal | get 'interface')" -j "${log_file}" \
+		|| be_done 4 "error running dhcpcd"
+	set_internal_group dhcpcd 'exit_status' $?
+	log 0 "dhcpcd exited"
+	# TODO: get protocol duration
 
-	jq -c . <<- EOF
-	{
-		"process_status": ${process_status},
-		"process_duration": $(duration "${dhcpcd_start}" "${dhcpcd_done}"),
-		"protocol_duration": $(duration "${discover_time}" "${offer_time}"),
-		"ip_addr": $(ip -j addr show "${int}" | jq -c '.[]'),
-		"dhcpcd_log": "$(zstd -qc "${log_file}" | base64 -w 0)"
-	}
-	EOF
-
-	[[ ${process_status} == 0 ]] \
-		|| bail ${process_status} "${int}" "dhcpcd failed; exiting"
+	be_done
 }
 
 function help() {
@@ -77,40 +62,44 @@ function help() {
 	exit "$1"
 }
 
-function log() {
-	local -i i=0
-	while [[ $# -gt 0 && i -le $verbosity ]]; do
-		[[ -n "$1" ]] && echo "$(basename "$0"): $1" >&2
-		shift
-		(( i++ ))
-	done
+function init_json() {
+	JSON="$(base_json \
+		| jq \
+			--compact-output \
+			--argjson none "$(none)" \
+			'.internal += {
+				"dhcpcd": {
+					"log_file": "/tmp/pssid-dhcpcd.log",
+					"duration": $none
+				},
+				"pcap": {
+					"file": "/tmp/pssid-dhcp.pcap",
+					"enabled": false
+				}
+			}'
+		)"
 }
 
-function bail() {
-	local -i exit_code="$1"
-	local interface="$2"
-	shift 2
-	[[ -f "${log_file}" ]] && rm -f "${log_file}"
-	dhcpcd_running "${interface}" && dhcpcd -k "${interface}"
-	log "$@"
-	exit $exit_code
+function release() {
+	local dhcpcd_log
+	[[ $# -ge 2 ]] && set_status "$@"
+
+	dhcpcd_running && dhcpcd -k "$(internal | get 'interface')"
+	dhcpcd_log="$(internal | get 'dhcpcd' | get 'log_file')"
+	if [[ -f "${dhcpcd_log}" ]]; then
+		JSON="$(jq \
+			--compact-output \
+			--arg log "$(encode < "${dhcpcd_log}")" \
+			'.dhcpcd_log = $log' \
+			<<< "${JSON}"
+		)"
+		rm "${dhcpcd_log}"
+	fi
+	be_done
 }
 
-# $1: a line of dhcpcd log
-# stdout: the timestamp in seconds since epoch
-function get_time() {
-	date -d "$(cut -f 1 -d '[' <<< "$1")" '+%s'
-}
-
-# time between start ($1) and stop ($2) timestamps
-# input and output are seconds since epoch
-function duration() {
-	bc <<< "$2 - $1"
-}
-
-# Is DHCP running on interface $1?
 function dhcpcd_running() {
-	[[ -n "$1" && -f "/run/dhcpcd/$1.pid" ]]
+	[[ -f "/run/dhcpcd/$(internal | get 'interface').pid" ]]
 }
 
 main "$@"
