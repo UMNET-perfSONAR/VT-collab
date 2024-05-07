@@ -254,7 +254,7 @@ function some() {
 	jq \
 		--null-input \
 		--compact-output \
-		--arg value "$value" \
+		--arg value "$1" \
 		'.is_set = true | .value = $value'
 }
 
