@@ -16,38 +16,37 @@
 # - xargs
 # - zstd
 
+source "$(dirname "$0")/libpssid.sh"
 declare JSON
-JSON="$(jq -c . 2>&1 <<- EOF
-	{
-		"status_code": 0,
-		"status_msg": "success",
-		"internal": {
-			"supplicant": {
-				"log_file": "/tmp/pssid-wpa_supplicant.log",
-				"config_file": { "is_set": false },
-				"ctrl_path": { "is_set": false },
-				"interface": { "is_set": false }
-			},
-			"mon_pcap": {
-				"enabled": false,
-				"file": "/tmp/pssid_mon.pcap",
-				"interface": { "is_set": false },
-				"pid": { "is_set": false }
-			},
-			"verbosity": 0
+JSON="$(jq \
+	--null-input \
+	--compact-output \
+	--argjson base "$(base_json)" \
+	--argjson none "$(none)" \
+	'$base | .internal += {
+		"supplicant": {
+			"config_file": $none,
+			"ctrl_path": $none
+		},
+		"mon_pcap": {
+			"enabled": false,
+			"file": "/tmp/pssid_mon.pcap",
+			"interface": $none,
+			"pid": $none
 		}
-	}
-EOF
-)" || exit 1
+	}' \
+	2>&1
+)" || exit 255
+declare -r WPAS_LOG_FILE='/tmp/pssid-wpa_supplicant.log'
 
 function main() {
 	local -i disconnect=0
 
 	while getopts 'c:di:hm:v' opt; do
 		case "${opt}" in
-			c) wpas_set 'config_file' "${OPTARG}" ;;
+			c) set_internal_group 'supplicant' 'config_file' "${OPTARG}" ;;
 			d) disconnect=1 ;;
-			i) wpas_set 'interface' "${OPTARG}" ;;
+			i) set_interface "${OPTARG}" ;;
 			m) mon_enable "${OPTARG}" ;;
 			v) increase_verbosity ;;
 			h) help 0 ;;
@@ -56,15 +55,10 @@ function main() {
 	done
 
 	[[ "$UID" == 0 ]] || be_done 64 "Must be root"
-	wpas | is_some 'interface' || be_done 65 'Must specify the interface'
-	wpas | is_some 'config_file' || be_done 66 'A wpa_supplicant config file is required'
-
-	wpas_set \
-		'ctrl_path' \
-		"$(grep ctrl_interface \
-			"$(wpas | get 'config_file' | unwrap)" \
-			| cut -f 2 -d '=' | xargs)"
-	wpas | is_some 'ctrl_path' || be_done 67 "Configuration file must have a ctrl_interface directive"
+	get_interface > /dev/null || be_done 65 'Must specify the interface'
+	get_internal_group 'supplicant' 'config_file' > /dev/null \
+		|| be_done 66 'A wpa_supplicant config file is required'
+	set_internal_group 'supplicant' 'ctrl_path' "$(scrape_ctrl_path)"
 
 	[[ "${disconnect}" == 1 ]] && terminate
 	connect
@@ -79,56 +73,53 @@ function help() {
 }
 
 function connect() {
-	! wpa_running || be_done 68 "wpa_supplicant is already running."
+	! wpa_running || be_done 67 "wpa_supplicant is already running."
 
-	# a failure will exit the script, so masking the return value is ok
-	# shellcheck disable=SC2155
-	local log_file="$(wpas | get 'log_file')"
-	if [[ -f "${log_file}" ]]; then
-		log 1 "WARNING: log file '${log_file}' already exists -- removing"
-		rm "${log_file}" || be_done 255 "Error removing old log file"
+	if [[ -f "${WPAS_LOG_FILE}" ]]; then
+		log 1 "WARNING: log file '${WPAS_LOG_FILE}' already exists -- removing"
+		rm "${WPAS_LOG_FILE}" || be_done 254 "Error removing old log file"
 	fi
 
 	if mon_enabled; then
 		log 2 "Starting tcpdump"
 		tcpdump \
-			--interface "$(mon | get 'interface' | unwrap)" \
-			-w "$(mon | get 'file')" \
+			--interface "$(get_interface || panic)" \
+			-w "$(get_internal_group 'mon_pcap' 'file' || panic)" \
 			--nano \
 			> /dev/null 2>&1 \
 			&
-		mon_set 'pid' $!
+		set_internal_group 'mon_pcap' 'pid' $!
 		log 2 "Started tcpdump"
 	fi
 
 	wpa_supplicant \
 		-Bt \
-		-i "$(wpas | get 'interface' | unwrap)" \
-		-c "$(wpas | get 'config_file' | unwrap)" \
-		-f "$log_file" \
+		-i "$(get_interface || panic)" \
+		-c "$(get_internal_group 'supplicant' 'config_file' || panic)" \
+		-f "$WPAS_LOG_FILE" \
 		|| terminate \
 			69 "Error launching wpa_supplicant" \
 			1 "Check the config file and interface name"
 	timeout 10 \
-		tail -f "${log_file}" \
+		tail -f "${WPAS_LOG_FILE}" \
 		| grep -m 1 CTRL-EVENT-CONNECTED > /dev/null \
 		|| terminate \
 			1 "Unable to connect" \
 			1 "wpa_supplicant exit status: $?"
 
 	if mon_enabled; then
-		#sync "$(mon | get 'file')"
+		# TODO: is a sync necessary here?
 		log 2 "Stopping tcpdump"
-		kill "$(mon | get 'pid' | unwrap)"
-		#sync "$(mon | get 'file')"
+		kill "$(get_internal_group 'mon_pcap' 'pid' || panic)"
 		log 2 "tcpdump killed"
+		unset_internal_group 'mon_pcap' 'pid'
 		JSON="$(jq \
 			--compact-outputs \
-			--arg pcap "$(encode < "$(mon | get 'file' | unwrap)")" \
+			--arg pcap "$(get_internal_group 'mon_pcap' 'file' || panic)" \
 			'.pcap = $pcap' \
 			<<< "${JSON}"
 		)"
-		rm "$(mon | get 'file')"
+		rm "$(get_internal_group 'mon_pcap' 'file' || panic)"
 	fi
 	be_done
 }
@@ -138,187 +129,38 @@ function terminate() {
 
 	wpa_running \
 		&& wpa_cli \
-			-i "$(wpas | get 'interface' | unwrap)" \
-			-p "$(wpas | get 'ctrl_path' | unwrap)" \
+			-i "$(get_interface || panic)" \
+			-p "$(get_internal_group 'supplicant' 'ctrl_path')" \
 			terminate \
 			> /dev/null
-	if [[ -f "$(wpas | get 'log_file')" ]]; then
+	if [[ -f "${WPAS_LOG_FILE}" ]]; then
 		JSON="$(jq \
 			--compact-output \
-			--arg log "$(encode < "$(wpas | get 'log_file')")" \
+			--arg log "$(encode < "${WPAS_LOG_FILE}")" \
 			'."wpa_log" = $log' \
 			<<< "${JSON}"
 		)"
-		rm "$(wpas | get 'log_file')"
+		rm "${WPAS_LOG_FILE}"
 	fi
 	be_done
 }
 
-function be_done() {
-	local filter
-	[[ $# -ge 2 ]] && set_status "$@"
-	verbosity_met 4 && filter='.' || filter='del(.internal)'
-	jq --compact-output "${filter}" <<< "${JSON}"
-	# shellcheck disable=SC2046
-	# .status_code is an integer, thus doesn't need quoting.
-	# And if it isn't an integer, we want it to break
-	exit $(get 'status_code' <<< "$JSON")
-}
-
-function set_status() {
-	local -i code="$1"
-	local msg="$2"
-	err_log "$msg"
-	JSON="$(jq \
-		--compact-output \
-		--arg code "$code" \
-		--arg msg "$2" \
-		'.status_code = ($code | tonumber) | .status_msg = $msg' \
-		<<< "$JSON"
-	)"
-	shift 2
-	while [[ $# -ge 2 ]]; do
-		log "$1" "$2"
-		shift 2
-	done
-}
-
-function log() {
-	local time
-	time="$(date +%s.%6N)"
-	local -i log_level="$1"
-	local msg="$2"
-	verbosity_met "${log_level}" || return 0
-
-	err_log "${msg}"
-	JSON="$(jq \
-		--compact-output \
-		--arg ll "$log_level" \
-		--arg time "$time" \
-		--arg msg "$msg" \
-		'.pssid_log += [
-			{
-				"time": ($time | tonumber),
-				"verbosity": ($ll | tonumber),
-				"msg": $msg
-			}
-		]' \
-		<<< "${JSON}"
-	)"
-}
-
-function err_log() {
-	echo "$(basename "$0"): $1" >&2
-}
-
-function panic() {
-	jq \
-		--null-input \
-		--argjson base "${JSON}" \
-		--arg code "$1" \
-		--arg msg "$2" \
-		'$base | .status_code = ($code | tonumber) | .status_msg = $msg' >&2
-	kill -HUP $$
-}
-
-function get() {
-	jq --exit-status --raw-output --arg key "$1" '.[$key]' \
-		|| panic 253 "Error getting key '$1'"
-}
-
-function unwrap() {
-	jq \
-		--raw-output \
-		--exit-status \
-		'select(.is_set).value' \
-		|| panic 254 "Error unwraping"
-}
-
-function is_some() {
-	jq \
-		--exit-status \
-		--arg key "$1" \
-		'.[$key].is_set' \
-		> /dev/null
-}
-
-function is_none() {
-	jq \
-		--exit-status \
-		--arg key "$1" \
-		'.[$key].is_set == false' \
-		> /dev/null
-}
-
-function some() {
-	jq \
-		--null-input \
-		--compact-output \
-		--arg value "$1" \
-		'.is_set = true | .value = $value'
-}
-
-function increase_verbosity() {
-	JSON="$(jq \
-		--compact-output \
-		'.internal.verbosity += 1' \
-		<<< "${JSON}"
-	)"
-}
-
-function verbosity_met() {
-	jq \
-		--exit-status \
-		--arg v "$1" \
-		'.internal.verbosity >= ($v | tonumber)' \
-		> /dev/null \
-		<<< "${JSON}"
-}
-
-function wpas() {
-	jq '.internal.supplicant' <<< "${JSON}"
-}
-
-function wpas_set() {
-	local key="$1"
-	local value="$2"
-	[[ -n "$value" ]] || return 1
-	wpas | is_none "$key" \
-		&& JSON="$(jq \
-			--compact-output \
-			--arg key "$key" \
-			--argjson value "$(some "$value")" \
-			'.internal.supplicant[$key] += $value' \
-			<<< "${JSON}"
-		)"
-}
-
-function mon() {
-	jq '.internal.mon_pcap' <<< "${JSON}"
+function scrape_ctrl_path() {
+	local config_file
+	config_file="$(get_internal_group 'supplicant' 'config_file')" || panic
+	grep ctrl_interface "${config_file}" \
+		| cut -f 2 -d '=' \
+		| xargs \
+		|| panic 68 "Configuration file must have a ctrl_interface directive"
 }
 
 function mon_enable() {
-	local int="$1"
+	set_internal_group 'mon_pcap' 'interface' "$1"
 	JSON="$(jq \
 		--compact-output \
-		--argjson int "$(some "$int")" \
-		'.internal.mon_pcap += {"enabled": true, "interface": $int}' \
+		'.internal.mon_pcap.enabled = true' \
 		<<< "${JSON}"
 	)"
-}
-
-function mon_set() {
-	local key="$1"
-	local value="$2"
-	[[ -n "$value" ]] || return 1
-	mon | is_none "$key" \
-		&& JSON="$(jq \
-			--compact-output \
-			--arg key "$key" \
-			--argjson value "$(some "$value")" \
-			'.internal.mon_pcap[$key] += $value' \
-			<<< "${JSON}"
-		)"
 }
 
 function mon_enabled() {
@@ -327,11 +169,7 @@ function mon_enabled() {
 
 # Is the expected instance of wpa_supplicant already running?
 function wpa_running() {
-	[[ -S "$(wpas | get 'ctrl_path' | unwrap )/$(wpas | get 'interface' | unwrap)" ]]
-}
-
-function encode() {
-	zstd | base64 -w 0
+	[[ -S "$(internal | get 'supplicant' | get 'ctrl_path' || panic)/$(get_interface || panic)" ]]
 }
 
 main "$@"
