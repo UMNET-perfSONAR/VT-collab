@@ -34,6 +34,7 @@ declare -r DHCPCD_LOG_FILE='/tmp/pssid-dhcpcd.log'
 
 function main() {
 	local -i disconnect=0
+	local -i dhcpcd_exit_status
 
 	while getopts 'di:hv' opt; do
 		case "${opt}" in
@@ -41,27 +42,29 @@ function main() {
 			i) set_interface "${OPTARG}" ;;
 			v) increase_verbosity ;;
 			h) help 0 ;;
-			*) help 1 ;;
+			*) help 64 ;;
 		esac
 	done
 
-	[[ "$UID" == 0 ]] || be_done 1 'Must be root'
-	get_interface > /dev/null || be_done 2 'Must specify the interface'
+	[[ "$UID" == 0 ]] || be_done 65 'Must be root'
+	get_interface > /dev/null || be_done 66 'Must specify the interface'
 	[[ "${disconnect}" == 1 ]] && release
-	dhcpcd_running && release 3 "dhcpcd already running; releasing and cleaning up"
+	dhcpcd_running \
+		&& release 67 "dhcpcd already running; releasing and cleaning up"
 
 	if [[ -f "${DHCPCD_LOG_FILE}" ]]; then
 		log 1 "WARNING: log file '${DHCPCD_LOG_FILE}' already exists -- removing"
-		rm "${DHCPCD_LOG_FILE}" || be_done 255 "Error removing old log file"
+		rm "${DHCPCD_LOG_FILE}" || be_done 254 "Error removing old log file"
 	fi
 
 	log 0 "dhcpcd started"
-	dhcpcd "$(get_interface || panic)" -j "${DHCPCD_LOG_FILE}" \
-		|| be_done 4 "error running dhcpcd"
-	set_internal_group dhcpcd 'exit_status' $?
-	log 0 "dhcpcd exited"
-	# TODO: get protocol duration
+	dhcpcd "$(get_interface || panic)" -j "${DHCPCD_LOG_FILE}"
+	dhcpcd_exit_status=$?
+	log 0 "dhcpcd exited with status ${dhcpcd_exit_status}"
+	# TODO: get pcap and protocol duration
 
+	[[ 0 -eq ${dhcpcd_exit_status} ]] \
+		|| set_status 1 "dhcpcd exited with error status ${dhcpcd_exit_status}"
 	be_done
 }
 
@@ -76,7 +79,9 @@ function help() {
 function release() {
 	[[ $# -ge 2 ]] && set_status "$@"
 
-	dhcpcd_running && dhcpcd -k "$(get_interface || panic)"
+	log 0 "Releasing addresses"
+	dhcpcd -k "$(get_interface || panic)" \
+		|| set_status 2 "dhcpcd exited with status $? on release"
 	if [[ -f "${DHCPCD_LOG_FILE}" ]]; then
 		JSON="$(jq \
 			--compact-output \
@@ -84,7 +89,8 @@ function release() {
 			'.dhcpcd_log = $log' \
 			<<< "${JSON}"
 		)"
-		rm "${DHCPCD_LOG_FILE}"
+		rm "${DHCPCD_LOG_FILE}" \
+			|| log 1 "WARNING: unable to cleanup log file '${DHCPCD_LOG_FILE}'"
 	fi
 	be_done
 }
