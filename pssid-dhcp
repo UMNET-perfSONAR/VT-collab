@@ -38,7 +38,7 @@ function main() {
 	while getopts 'di:hv' opt; do
 		case "${opt}" in
 			d) disconnect=1 ;;
-			i) set_internal 'interface' "${OPTARG}" ;;
+			i) set_interface "${OPTARG}" ;;
 			v) increase_verbosity ;;
 			h) help 0 ;;
 			*) help 1 ;;
@@ -46,7 +46,7 @@ function main() {
 	done
 
 	[[ "$UID" == 0 ]] || be_done 1 'Must be root'
-	internal | get 'interface' > /dev/null || be_done 2 'Must specify the interface'
+	get_interface > /dev/null || be_done 2 'Must specify the interface'
 	[[ "${disconnect}" == 1 ]] && release
 	dhcpcd_running && release 3 "dhcpcd already running; releasing and cleaning up"
 
@@ -56,7 +56,7 @@ function main() {
 	fi
 
 	log 0 "dhcpcd started"
-	dhcpcd "$(internal | get 'interface')" -j "${DHCPCD_LOG_FILE}" \
+	dhcpcd "$(get_interface || panic)" -j "${DHCPCD_LOG_FILE}" \
 		|| be_done 4 "error running dhcpcd"
 	set_internal_group dhcpcd 'exit_status' $?
 	log 0 "dhcpcd exited"
@@ -76,7 +76,7 @@ function help() {
 function release() {
 	[[ $# -ge 2 ]] && set_status "$@"
 
-	dhcpcd_running && dhcpcd -k "$(internal | get 'interface')"
+	dhcpcd_running && dhcpcd -k "$(get_interface || panic)"
 	if [[ -f "${DHCPCD_LOG_FILE}" ]]; then
 		JSON="$(jq \
 			--compact-output \
@@ -90,7 +90,7 @@ function release() {
 }
 
 function dhcpcd_running() {
-	[[ -f "/run/dhcpcd/$(internal | get 'interface').pid" ]]
+	[[ -f "/run/dhcpcd/$(get_interface || panic).pid" ]]
 }
 
 main "$@"
