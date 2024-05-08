@@ -182,6 +182,47 @@ function set_internal_group() {
 	)"
 }
 
+function unset_internal() {
+	local key="$2"
+
+	jq \
+		--null-input \
+		--argjson base "${JSON}" \
+		--arg key "${key}" \
+		'.internal[$key]' \
+		| is_some \
+		|| return 1 # TODO: better error handling
+	JSON="$(jq \
+		--compact-output \
+		--arg key "${key}" \
+		--arg none "$(none)" \
+		'.internal[$key] = $none' \
+		<<< "${JSON}"
+	)"
+}
+
+function unset_internal_group() {
+	local group="$1"
+	local key="$2"
+
+	jq \
+		--null-input \
+		--argjson base "${JSON}" \
+		--arg group "${group}" \
+		--arg key "${key}" \
+		'.internal[$group][$key]' \
+		| is_some \
+		|| return 1 # TODO: better error handling
+	JSON="$(jq \
+		--compact-output \
+		--arg group "${JSON}" \
+		--arg key "${key}" \
+		--arg none "$(none)" \
+		'.internal[$group][$key] = $none' \
+		<<< "${JSON}"
+	)"
+}
+
 function get() {
 	jq \
 		--exit-status \
@@ -196,8 +237,16 @@ function get() {
 		|| set_status 131 "Internal error getting '${key}'"
 }
 
-function interface() {
+function get_internal_group() {
+	internal | (get "$1" || panic) | get "$2"
+}
+
+function get_interface() {
 	internal | get 'interface'
+}
+
+function set_interface() {
+	set_internal 'interface' "$1"
 }
 
 function internal() {
