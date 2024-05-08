@@ -16,12 +16,24 @@
 
 source "$(dirname "$0")/libpssid.sh"
 declare JSON
+JSON="$(jq \
+		--null-input \
+		--compact-output \
+		--argjson base "$(base_json)" \
+		--argjson none "$(none)" \
+		'$base
+		| .internal += {
+			"pcap": {
+				"file": "/tmp/pssid-dhcp.pcap",
+				"enabled": false
+			}
+		}'
+	)" \
+	|| exit 255
+declare -r DHCPCD_LOG_FILE='/tmp/pssid-dhcpcd.log'
 
 function main() {
-	init_json || exit 1
-
 	local -i disconnect=0
-	local log_file
 
 	while getopts 'di:hv' opt; do
 		case "${opt}" in
@@ -38,14 +50,13 @@ function main() {
 	[[ "${disconnect}" == 1 ]] && release
 	dhcpcd_running && release 3 "dhcpcd already running; releasing and cleaning up"
 
-	log_file="$(internal | get 'dhcpcd' | get 'log_file')"
-	if [[ -f "${log_file}" ]]; then
-		log 1 "WARNING: log file '$log_file' already exists -- removing"
-		rm "${log_file}" || be_done 255 "Error removing old log file"
+	if [[ -f "${DHCPCD_LOG_FILE}" ]]; then
+		log 1 "WARNING: log file '${DHCPCD_LOG_FILE}' already exists -- removing"
+		rm "${DHCPCD_LOG_FILE}" || be_done 255 "Error removing old log file"
 	fi
 
 	log 0 "dhcpcd started"
-	dhcpcd "$(internal | get 'interface')" -j "${log_file}" \
+	dhcpcd "$(internal | get 'interface')" -j "${DHCPCD_LOG_FILE}" \
 		|| be_done 4 "error running dhcpcd"
 	set_internal_group dhcpcd 'exit_status' $?
 	log 0 "dhcpcd exited"
@@ -62,38 +73,18 @@ function help() {
 	exit "$1"
 }
 
-function init_json() {
-	JSON="$(base_json \
-		| jq \
-			--compact-output \
-			--argjson none "$(none)" \
-			'.internal += {
-				"dhcpcd": {
-					"log_file": "/tmp/pssid-dhcpcd.log",
-					"duration": $none
-				},
-				"pcap": {
-					"file": "/tmp/pssid-dhcp.pcap",
-					"enabled": false
-				}
-			}'
-		)"
-}
-
 function release() {
-	local dhcpcd_log
 	[[ $# -ge 2 ]] && set_status "$@"
 
 	dhcpcd_running && dhcpcd -k "$(internal | get 'interface')"
-	dhcpcd_log="$(internal | get 'dhcpcd' | get 'log_file')"
-	if [[ -f "${dhcpcd_log}" ]]; then
+	if [[ -f "${DHCPCD_LOG_FILE}" ]]; then
 		JSON="$(jq \
 			--compact-output \
-			--arg log "$(encode < "${dhcpcd_log}")" \
+			--arg log "$(encode < "${DHCPCD_LOG_FILE}")" \
 			'.dhcpcd_log = $log' \
 			<<< "${JSON}"
 		)"
-		rm "${dhcpcd_log}"
+		rm "${DHCPCD_LOG_FILE}"
 	fi
 	be_done
 }
