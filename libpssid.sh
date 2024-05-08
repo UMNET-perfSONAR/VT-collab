@@ -92,7 +92,7 @@ function unwrap() {
 		--raw-output \
 		--exit-status \
 		'select(.is_set).value' \
-		|| panic 254 "Error unwraping"
+		|| panic 128 "Error unwraping"
 }
 
 function some() {
@@ -141,7 +141,7 @@ function set_internal() {
 
 	jq --arg key "${key}" '.internal[$key]' <<< "${JSON}" \
 		| is_none \
-		|| return 1
+		|| be_done 129 "Internal error setting .internal[${key}] = \"${value}\""
 
 	JSON="$(jq \
 		--compact-output \
@@ -159,7 +159,7 @@ function set_internal_group() {
 
 	jq --arg group "${group}" --arg key "${key}" '.internal[$group][$key]' <<< "${JSON}" \
 		| is_none \
-		|| return 1
+		|| be_done 130 "Internal error setting .internal[${group}][${key}] = \"${value}\""
 
 	JSON="$(jq \
 		--compact-output \
@@ -182,7 +182,7 @@ function get() {
 		else
 			.
 		end' \
-		|| panic 252 "'$1' is not set"
+		|| set_status 131 "Internal error getting '${key}'"
 }
 
 function interface() {
