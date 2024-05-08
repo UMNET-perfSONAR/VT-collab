@@ -165,7 +165,7 @@ function set_internal_group() {
 		--compact-output \
 		--arg group "${group}" \
 		--arg key "${key}" \
-		--arg value "$(some "${value}")" \
+		--argjson value "$(some "${value}")" \
 		'.internal[$group][$key] = $value' \
 		<<< "${JSON}"
 	)"
