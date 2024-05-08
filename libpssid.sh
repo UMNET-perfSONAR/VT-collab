@@ -128,9 +128,11 @@ function increase_verbosity() {
 
 function verbosity_met() {
 	jq \
+		--null-input \
 		--exit-status \
+		--argjson base "${JSON}" \
 		--arg v "$1" \
-		'.internal.verbosity >= ($v | tonumber)' \
+		'$base | .internal.verbosity >= ($v | tonumber)' \
 		> /dev/null \
 		<<< "${JSON}"
 }
@@ -139,7 +141,11 @@ function set_internal() {
 	local key="$1"
 	local value="$2"
 
-	jq --arg key "${key}" '.internal[$key]' <<< "${JSON}" \
+	jq \
+		--null-input \
+		--argjson base "${JSON}" \
+		--arg key "${key}" \
+		'$base | .internal[$key]' \
 		| is_none \
 		|| be_done 129 "Internal error setting .internal[${key}] = \"${value}\""
 
@@ -157,7 +163,12 @@ function set_internal_group() {
 	local key="$2"
 	local value="$3"
 
-	jq --arg group "${group}" --arg key "${key}" '.internal[$group][$key]' <<< "${JSON}" \
+	jq \
+		--null-input \
+		--argjson base "${JSON}" \
+		--arg group "${group}" \
+		--arg key "${key}" \
+		'$base | .internal[$group][$key]' \
 		| is_none \
 		|| be_done 130 "Internal error setting .internal[${group}][${key}] = \"${value}\""
 
