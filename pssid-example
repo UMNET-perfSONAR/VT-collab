@@ -25,9 +25,17 @@ function main() {
   "${exec_path}"/pssid-80211 -c "${wpa_conf}" -i "${int}"
   "${exec_path}"/pssid-dhcp -i "${int}"
 
-  ping -c "${count}" 1.1.1.1 &
+  ping \
+    -c "${count}" \
+    -i 0.2 \
+    -I "$(ip -j addr show wlan0 | jq -r '.[].addr_info[] | select(.family == "inet").local')" \
+    1.1.1.1 &
   pid4=$!
-  ping -c "${count}" 2606:4700:4700::1111 &
+  ping \
+    -c "${count}" \
+    -i 0.2 \
+    -I "$(ip -j addr show wlan0 | jq -r '.[].addr_info[] | select(.family == "inet6" and .scope == "global" and .temporary != "true").local')" \
+    2606:4700:4700::1111 &
   pid6=$!
 
   wait $pid4 $pid6
