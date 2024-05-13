@@ -57,15 +57,27 @@ function main() {
 		rm "${DHCPCD_LOG_FILE}" || be_done 254 "Error removing old log file"
 	fi
 
+	get_addrs
 	log 0 "dhcpcd started"
 	dhcpcd "$(get_interface || panic)" -j "${DHCPCD_LOG_FILE}"
 	dhcpcd_exit_status=$?
 	log 0 "dhcpcd exited with status ${dhcpcd_exit_status}"
+	get_addrs
 	# TODO: get pcap and protocol duration
 
 	[[ 0 -eq ${dhcpcd_exit_status} ]] \
 		|| set_status 1 "dhcpcd exited with error status ${dhcpcd_exit_status}"
 	be_done
+}
+
+function get_addrs() {
+	log 1 "Getting $(get_interface || panic) addresses)"
+	JSON="$(jq \
+		--compact-output \
+		--argjson info "$(ip -j addr show "$(get_interface || panic)")" \
+		'.addr_info += [$info]' \
+		<<< "${JSON}"
+	)"
 }
 
 function help() {
@@ -79,9 +91,12 @@ function help() {
 function release() {
 	[[ $# -ge 2 ]] && set_status "$@"
 
+	get_addrs
 	log 0 "Releasing addresses"
 	dhcpcd -k "$(get_interface || panic)" \
 		|| set_status 2 "dhcpcd exited with status $? on release"
+	log 1 "Addresses released"
+	get_addrs
 	if [[ -f "${DHCPCD_LOG_FILE}" ]]; then
 		JSON="$(jq \
 			--compact-output \
