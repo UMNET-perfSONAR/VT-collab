@@ -22,8 +22,8 @@ function main() {
 
   exec_path="$(dirname "$0")"
 
-  "${exec_path}"/pssid-80211 -c "${wpa_conf}" -i "${int}"
-  "${exec_path}"/pssid-dhcp -i "${int}"
+  "${exec_path}"/pssid-80211 -c "${wpa_conf}" -i "${int}" > 80211-start.json
+  "${exec_path}"/pssid-dhcp -i "${int}" > dhcp-start.json
 
   ping \
     -c "${count}" \
@@ -40,8 +40,8 @@ function main() {
 
   wait $pid4 $pid6
 
-  "${exec_path}"/pssid-dhcp -i "${int}" -d
-  "${exec_path}"/pssid-80211 -c "${wpa_conf}" -i "${int}" -d
+  "${exec_path}"/pssid-dhcp -i "${int}" -d > dhcp-end.json
+  "${exec_path}"/pssid-80211 -c "${wpa_conf}" -i "${int}" -d > 80211-end.json
 }
 
 function help() {
