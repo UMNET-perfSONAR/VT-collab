@@ -2,8 +2,8 @@
 A collection of tools for testing layers 2 and 3 with pSSID.
 
 ## Setup
-- [Download][ubuntu] and install the Ubuntu Raspberry Pi Generic (64-bit ARM)
-  preinstalled server image
+- [Download][ubuntu] and install the Ubuntu 22.04 Raspberry Pi Generic
+  (64-bit ARM) preinstalled server image
 - Disable problematic services:
   ```bash
   systemctl --now disable \
