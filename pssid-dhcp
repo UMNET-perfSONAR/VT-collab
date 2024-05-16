@@ -22,6 +22,7 @@ JSON="$(jq \
 		--argjson base "$(base_json)" \
 		--argjson none "$(none)" \
 		'$base
+		| .addr_info = {}
 		| .internal += {
 			"pcap": {
 				"file": "/tmp/pssid-dhcp.pcap",
@@ -74,8 +75,9 @@ function get_addrs() {
 	log 1 "Getting $(get_interface || panic) addresses)"
 	JSON="$(jq \
 		--compact-output \
-		--argjson info "$(ip -j addr show "$(get_interface || panic)")" \
-		'.addr_info += [$info]' \
+		--arg now "$(date +%s.%6N)" \
+		--argjson info "$(ip -j addr show "$(get_interface || panic)" | jq '.[]')" \
+		'.addr_info += {($now): $info}' \
 		<<< "${JSON}"
 	)"
 }
