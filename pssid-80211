@@ -92,6 +92,7 @@ function connect() {
 		log 2 "Started tcpdump"
 	fi
 
+	log 0 'Starting supplicant'
 	wpa_supplicant \
 		-Bt \
 		-i "$(get_interface || panic)" \
@@ -106,6 +107,11 @@ function connect() {
 		|| terminate \
 			1 "Unable to connect" \
 			1 "wpa_supplicant exit status: $?"
+	if [[ $? > 0 ]]; then
+		log 0 'Unable to connect'
+	else
+		log 0 'Connected'
+	fi
 
 	if mon_enabled; then
 		# TODO: is a sync necessary here?
@@ -127,6 +133,7 @@ function connect() {
 function terminate() {
 	[[ $# -ge 2 ]] && set_status "$@"
 
+	log 0 'Disconnecting'
 	wpa_running \
 		&& wpa_cli \
 			-i "$(get_interface || panic)" \
