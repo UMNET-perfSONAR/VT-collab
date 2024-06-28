@@ -107,7 +107,7 @@ function connect() {
 		|| terminate \
 			1 "Unable to connect" \
 			1 "wpa_supplicant exit status: $?"
-	if [[ $? > 0 ]]; then
+	if [[ $? -gt 0 ]]; then
 		log 0 'Unable to connect'
 	else
 		log 0 'Connected'
