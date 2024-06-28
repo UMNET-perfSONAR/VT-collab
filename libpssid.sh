@@ -41,7 +41,7 @@ function set_status() {
 	JSON="$(jq \
 		--compact-output \
 		--arg code "$code" \
-		--arg msg "$2" \
+		--arg msg "$msg" \
 		'.status_code = ($code | tonumber) | .status_msg = $msg' \
 		<<< "$JSON"
 	)"
