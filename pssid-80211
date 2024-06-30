@@ -145,13 +145,27 @@ function terminate() {
 	if [[ -f "${WPAS_LOG_FILE}" ]]; then
 		JSON="$(jq \
 			--compact-output \
-			--arg log "$(encode < "${WPAS_LOG_FILE}")" \
+			--argjson log "$(parse_log)" \
 			'."wpa_log" = $log' \
 			<<< "${JSON}"
 		)"
 		rm "${WPAS_LOG_FILE}"
 	fi
 	be_done
+}
+
+function parse_log() {
+	jq \
+		--raw-input \
+		--slurp \
+		--compact-output \
+		'. / "\n"
+		| map(select(. != "") / ":"
+			| {
+				"time": .[0] | tonumber,
+				"msg": .[1:] | join(":") | ltrimstr(" ") | rtrimstr(" ")
+			})' \
+		< "${WPAS_LOG_FILE}"
 }
 
 function scrape_ctrl_path() {
