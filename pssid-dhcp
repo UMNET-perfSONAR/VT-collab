@@ -102,7 +102,7 @@ function release() {
 	if [[ -f "${DHCPCD_LOG_FILE}" ]]; then
 		JSON="$(jq \
 			--compact-output \
-			--arg log "$(encode < "${DHCPCD_LOG_FILE}")" \
+			--argjson log "$(parse_dhcpcd_log)" \
 			'.dhcpcd_log = $log' \
 			<<< "${JSON}"
 		)"
@@ -114,6 +114,22 @@ function release() {
 
 function dhcpcd_running() {
 	[[ -f "/run/dhcpcd/$(get_interface || panic).pid" ]]
+}
+
+function parse_dhcpcd_log() {
+	jq \
+		--raw-input \
+		--slurp \
+		'. / "\n"
+			| map(select(. != "")
+			| strptime("%B %d %H:%M:%S")
+			| {
+				"time": (.[:-1] | .[0] = (now | gmtime[0]) | mktime - (0 | localtime | mktime)),
+				"pid": ((.[-1] / ":")[0] | ltrimstr(" [") | rtrimstr("]") | tonumber),
+				"msg": (.[-1] / ":" | .[1:] | join(":") | ltrimstr(" "))
+			}
+		)' \
+		< "${DHCPCD_LOG_FILE}"
 }
 
 main "$@"
