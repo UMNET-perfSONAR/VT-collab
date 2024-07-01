@@ -13,10 +13,18 @@ A collection of tools for testing layers 2 and 3 with pSSID.
     unattended-upgrades
   ```
 - Install additional dependencies: `apt install jq dhcpcd5`
-- Make sure the `dhcpcd` service is disabled:
+- If you are running pssid in the default user and network namespaces, disable
+  the `dhcpcd` daemon:
   ```bash
-  systemctl --now disable dhcpcd
+  systemctl --now disable dhcpcd.service
   ```
+
+## General notes
+- Output is to `stdout` in JSON
+    - All string values use standard JSON escaping
+    - All timestamps are in seconds since Unix epoch
+- Additional output that may be helpful for debugging or building a script for a
+  test suite is output to `stderr`
 
 ## `pssid-80211`
 
@@ -75,24 +83,14 @@ pssid-80211 -c wpa_supplicant.conf -i wlan0 -d > 80211-disconnect.json
       "msg": "Disconnecting"
     }
   ],
-  "wpa_log": "KLUv/QRYxRsAdny1JvCszAOTDD81rK..."
+  "wpa_log": [
+    {
+      "time": 1716181421.242576,
+      "msg": "Successfully initialized wpa_supplicant"
+    },
+    ...
+  ]
 }
-```
-
-The path `.wpa_log` in the json contains the whole `wpa_supplicant` log,
-compressed with zstd and encoded in base64.
-
-Reading the supplicant log:
-```bash
-jq -r .wpa_log 80211-disconnect.json | base64 -d | zstd -d | head -5
-```
-
-```
-1716181421.242576: Successfully initialized wpa_supplicant
-1716181424.165842: wlan0: Trying to associate with SSID 'eduroam'
-1716181426.983659: wlan0: Associated with cc:d0:83:ce:71:80
-1716181426.983884: wlan0: CTRL-EVENT-SUBNET-STATUS-UPDATE status=0
-1716181426.985464: wlan0: CTRL-EVENT-EAP-STARTED EAP authentication started
 ```
 
 ### wpa_supplicant configuration file
@@ -269,13 +267,17 @@ dhcp-disconnet.json (pretty printed):
     }
   ],
   "addr_info": { ... }
-  "dhcpcd_log": "KLUv/QRYLR8AtuRnIUBP2+Nnu..."
+  "dhcpcd_log": [
+    {
+      "time": 1716184176,
+      "pid": 754986,
+      "msg": "dhcpcd-10.0.8 starting"
+    },
+    ...
+  ]
 ```
 
-And just like before, we can get the whole `dhcpcd` log:
-```bash
-jq -r .dhcpcd_log dhcp-disconnect.json | base64 -d | zstd -d
-```
+Here, `pid` in the `dhcpcd` log is the process ID that generated the log.
 
 [ubuntu]: https://cdimage.ubuntu.com/releases/22.04/release/ubuntu-22.04.4-preinstalled-server-arm64+raspi.img.xz
 [wpa_supplicant.conf]: https://w1.fi/cgit/hostap/plain/wpa_supplicant/wpa_supplicant.conf
