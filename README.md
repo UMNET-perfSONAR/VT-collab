@@ -4,19 +4,13 @@ A collection of tools for testing layers 2 and 3 with pSSID.
 ## Setup
 - [Download][ubuntu] and install the Ubuntu 22.04 Raspberry Pi Generic
   (64-bit ARM) preinstalled server image
-- Make sure you have ssh access without the default network services
-- Disable problematic services (note this will disable DHCP on the wired
-  interface):
+- Install additional dependencies: `apt install jq dhcpcd5`
+- Disable problematic services:
   ```bash
   systemctl --now disable \
-    wpa_supplicant \
-    unattended-upgrades
-  ```
-- Install additional dependencies: `apt install jq dhcpcd5`
-- If you are running pssid in the default user and network namespaces, disable
-  the `dhcpcd` daemon:
-  ```bash
-  systemctl --now disable dhcpcd.service
+    dhcpcd.service \
+    unattended-upgrades \
+    wpa_supplicant
   ```
 
 ## General notes
