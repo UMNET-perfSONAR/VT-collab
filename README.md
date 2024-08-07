@@ -99,8 +99,8 @@ Any suitable path will work, but the default is recommended.
 ctrl_interface=/var/run/wpa_supplicant
 ```
 
-Configuring more than one wireless network may produce unexpected/unpredictable
-results.
+Configuring more than one wireless network, while perfectly valid for a typical
+Wi-Fi user, will produce unexpected/unpredictable testing results.
 
 #### Open network example
 ```conf
@@ -110,6 +110,18 @@ network={
   key_mgmt=NONE
 }
 ```
+
+#### Preshared key example
+To generate an open network config, use `wpa_passphrase`:
+```
+$ wpa_passphrase yournet somepassphrase
+network={
+        ssid="yournet"
+        #psk="somepassphrase"
+        psk=f1eb503b94fcaf3b4edb966c8d309aabebd67249eacf62d058ae83f138026598
+}
+```
+Just don't forget to add the `ctrl_interface` directive.
 
 #### PEAP-MSCHAPv2 example
 > [!NOTE]
