@@ -32,15 +32,17 @@ JSON="$(jq \
 	)" \
 	|| exit 255
 declare -r DHCPCD_LOG_FILE='/tmp/pssid-dhcpcd.log'
+declare SSID=""
 
 function main() {
 	local -i disconnect=0
 	local -i dhcpcd_exit_status
 
-	while getopts 'di:hv' opt; do
+	while getopts 'di:s:hv' opt; do
 		case "${opt}" in
 			d) disconnect=1 ;;
 			i) set_interface "${OPTARG}" ;;
+			s) SSID="${OPTARG}" ;;
 			v) increase_verbosity ;;
 			h) help 0 ;;
 			*) help 64 ;;
@@ -59,10 +61,10 @@ function main() {
 	fi
 
 	get_addrs
-	log 0 "dhcpcd started"
+	log_with_ssid 0 "dhcpcd started"
 	dhcpcd "$(get_interface || panic)" -j "${DHCPCD_LOG_FILE}"
 	dhcpcd_exit_status=$?
-	log 0 "dhcpcd exited with status ${dhcpcd_exit_status}"
+	log_with_ssid 0 "dhcpcd exited with status ${dhcpcd_exit_status}"
 	get_addrs
 	# TODO: get pcap and protocol duration
 
@@ -71,8 +73,18 @@ function main() {
 	be_done
 }
 
+function log_with_ssid() {
+	local level="$1"
+        local message="$2"
+        if [[ -n "${SSID}" ]]; then
+                log "${level}" "SSID: ${SSID} - ${message}"
+        else
+                log "${level}" "${message}"
+        fi
+}
+
 function get_addrs() {
-	log 1 "Getting $(get_interface || panic) addresses)"
+	log_with_ssid 1 "Getting $(get_interface || panic) addresses)"
 	JSON="$(jq \
 		--compact-output \
 		--arg now "$(date +%s.%6N)" \
@@ -86,7 +98,7 @@ function help() {
 	local self
 	self="$(basename "$0")"
 	echo "Connect with: $self -i <wlan interface> [-v]"
-	echo "Disconnect with: $self -d -i <wlan interface> [-v]"
+	echo "Disconnect with: $self -d -i <wlan interface> [-s <ssid>] [-v]"
 	exit "$1"
 }
 
@@ -94,10 +106,10 @@ function release() {
 	[[ $# -ge 2 ]] && set_status "$@"
 
 	get_addrs
-	log 0 "Releasing addresses"
+	log_with_ssid 0 "Releasing addresses"
 	dhcpcd -k "$(get_interface || panic)" \
 		|| set_status 2 "dhcpcd exited with status $? on release"
-	log 1 "Addresses released"
+	log_with_ssid 1 "Addresses released"
 	get_addrs
 	if [[ -f "${DHCPCD_LOG_FILE}" ]]; then
 		JSON="$(jq \
@@ -107,7 +119,7 @@ function release() {
 			<<< "${JSON}"
 		)"
 		rm "${DHCPCD_LOG_FILE}" \
-			|| log 1 "WARNING: unable to cleanup log file '${DHCPCD_LOG_FILE}'"
+			|| log_with_ssid 1 "WARNING: unable to cleanup log file '${DHCPCD_LOG_FILE}'"
 	fi
 	be_done
 }
