@@ -1,5 +1,4 @@
 #!/usr/bin/bash
-
 #
 # pssid-dhcp
 # A command run by pssid to gather dhcp metrics
@@ -13,7 +12,6 @@
 # - tail
 # - dhcpcd
 # - zstd
-
 source "$(dirname "$0")/libpssid.sh"
 declare JSON
 JSON="$(jq \
@@ -37,7 +35,6 @@ declare SSID=""
 function main() {
 	local -i disconnect=0
 	local -i dhcpcd_exit_status
-
 	while getopts 'di:s:hv' opt; do
 		case "${opt}" in
 			d) disconnect=1 ;;
@@ -48,43 +45,40 @@ function main() {
 			*) help 64 ;;
 		esac
 	done
-
 	[[ "$UID" == 0 ]] || be_done 65 'Must be root'
 	get_interface > /dev/null || be_done 66 'Must specify the interface'
+	
+	# Add SSID to JSON structure if provided
+	if [[ -n "${SSID}" ]]; then
+		JSON="$(jq \
+			--compact-output \
+			--arg ssid "${SSID}" \
+			'.ssid = $ssid' \
+			<<< "${JSON}"
+		)"
+	fi
+	
 	[[ "${disconnect}" == 1 ]] && release
 	dhcpcd_running \
 		&& release 67 "dhcpcd already running; releasing and cleaning up"
-
 	if [[ -f "${DHCPCD_LOG_FILE}" ]]; then
 		log 1 "WARNING: log file '${DHCPCD_LOG_FILE}' already exists -- removing"
 		rm "${DHCPCD_LOG_FILE}" || be_done 254 "Error removing old log file"
 	fi
-
 	get_addrs
-	log_with_ssid 0 "dhcpcd started"
+	log 0 "dhcpcd started"
 	dhcpcd "$(get_interface || panic)" -j "${DHCPCD_LOG_FILE}"
 	dhcpcd_exit_status=$?
-	log_with_ssid 0 "dhcpcd exited with status ${dhcpcd_exit_status}"
+	log 0 "dhcpcd exited with status ${dhcpcd_exit_status}"
 	get_addrs
 	# TODO: get pcap and protocol duration
-
 	[[ 0 -eq ${dhcpcd_exit_status} ]] \
 		|| set_status 1 "dhcpcd exited with error status ${dhcpcd_exit_status}"
 	be_done
 }
 
-function log_with_ssid() {
-	local level="$1"
-        local message="$2"
-        if [[ -n "${SSID}" ]]; then
-                log "${level}" "SSID: ${SSID} - ${message}"
-        else
-                log "${level}" "${message}"
-        fi
-}
-
 function get_addrs() {
-	log_with_ssid 1 "Getting $(get_interface || panic) addresses)"
+	log 1 "Getting $(get_interface || panic) addresses)"
 	JSON="$(jq \
 		--compact-output \
 		--arg now "$(date +%s.%6N)" \
@@ -104,12 +98,11 @@ function help() {
 
 function release() {
 	[[ $# -ge 2 ]] && set_status "$@"
-
 	get_addrs
-	log_with_ssid 0 "Releasing addresses"
+	log 0 "Releasing addresses"
 	dhcpcd -k "$(get_interface || panic)" \
 		|| set_status 2 "dhcpcd exited with status $? on release"
-	log_with_ssid 1 "Addresses released"
+	log 1 "Addresses released"
 	get_addrs
 	if [[ -f "${DHCPCD_LOG_FILE}" ]]; then
 		JSON="$(jq \
@@ -119,7 +112,7 @@ function release() {
 			<<< "${JSON}"
 		)"
 		rm "${DHCPCD_LOG_FILE}" \
-			|| log_with_ssid 1 "WARNING: unable to cleanup log file '${DHCPCD_LOG_FILE}'"
+			|| log 1 "WARNING: unable to cleanup log file '${DHCPCD_LOG_FILE}'"
 	fi
 	be_done
 }
@@ -145,5 +138,4 @@ function parse_dhcpcd_log() {
 }
 
 main "$@"
-
 # vim: ts=4 sts=4 sw=4 noexpandtab
